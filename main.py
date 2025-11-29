@@ -5,10 +5,28 @@ import os
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware  # [NEW] Import CORS
 from pydantic import BaseModel
 from typing import Dict, Optional
 
 app = FastAPI()
+
+# [NEW] CORS Configuration
+# This allows your 1free.eu website to talk to this backend.
+origins = [
+    "http://localhost",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "*"  # In production, replace "*" with "http://your-domain.1free.eu" for security
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 if not os.path.exists("static"):
     os.makedirs("static")
@@ -32,47 +50,27 @@ sensor_locations: Dict[str, Dict[str, float]] = {}
 latest_readings: Dict[str, SensorData] = {}
 
 # --- PRECISE GREEN MICRO-ZONES ---
-# Smaller radii (0.0015 - 0.0025) to ensure points stay strictly on grass/trees.
 GREEN_ZONES = [
-    # Pole Mokotowskie (Split into safe sectors)
     {"name": "Pole Mokotowskie (Main Lawn)", "lat": 52.2185, "lng": 21.0060, "radius": 0.0025},
     {"name": "Pole Mokotowskie (Ponds Area)", "lat": 52.2195, "lng": 21.0020, "radius": 0.0020},
     {"name": "Pole Mokotowskie (East)", "lat": 52.2175, "lng": 21.0110, "radius": 0.0015},
-
-    # Lazienki Krolewskie (Avoid Palace/Water)
     {"name": "Lazienki (Garden South)", "lat": 52.2120, "lng": 21.0350, "radius": 0.0020},
     {"name": "Lazienki (Garden North)", "lat": 52.2160, "lng": 21.0330, "radius": 0.0015},
-
-    # Park Ujazdowski (Very specific)
     {"name": "Park Ujazdowski", "lat": 52.2220, "lng": 21.0280, "radius": 0.0012},
-
-    # Ogrod Saski (Central)
     {"name": "Ogrod Saski", "lat": 52.2410, "lng": 21.0030, "radius": 0.0015},
-
-    # Park Skaryszewski
     {"name": "Park Skaryszewski (West)", "lat": 52.2425, "lng": 21.0540, "radius": 0.0020},
     {"name": "Park Skaryszewski (East)", "lat": 52.2430, "lng": 21.0590, "radius": 0.0020},
-
-    # Las Kabacki (Deep Woods)
     {"name": "Las Kabacki (Deep)", "lat": 52.1260, "lng": 21.0450, "radius": 0.0080},
-
-    # Las Bielanski
     {"name": "Las Bielanski", "lat": 52.2960, "lng": 20.9580, "radius": 0.0040},
 ]
 
 def generate_warsaw_location():
     """Generates a random coordinate strictly inside a green zone."""
-    # 1. Pick a random safe zone
     zone = random.choice(GREEN_ZONES)
-
-    # 2. Generate random point within that circle
     r = zone["radius"] * math.sqrt(random.random())
     theta = random.random() * 2 * math.pi
-
-    # 3. Calculate offset
     lat_offset = r * math.cos(theta)
-    lng_offset = r * math.sin(theta) * 1.6 # Longitude correction
-
+    lng_offset = r * math.sin(theta) * 1.6
     return {
         "lat": zone["lat"] + lat_offset,
         "lng": zone["lng"] + lng_offset
@@ -114,12 +112,10 @@ async def report_pollution(data: SensorData):
     if data.api_key != "SECRET_KEY_123":
         raise HTTPException(status_code=403, detail="Invalid API Key")
 
-    # 1. Auto-Discovery
     if data.sensor_name not in sensor_locations:
         sensor_locations[data.sensor_name] = generate_warsaw_location()
         print(f"New sensor: {data.sensor_name}")
 
-    # 2. Calculate & Store
     data.universal_aqi = calculate_aqi(data)
     latest_readings[data.sensor_name] = data
 

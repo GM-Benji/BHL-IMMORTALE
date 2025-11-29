@@ -47,28 +47,34 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 
     <script>
+      // ================= CONFIGURATION =================
+      // STEP 1: Deploy your backend (main.py) to a cloud provider (Render/Railway).
+      // STEP 2: Paste the URL they give you below.
+      // Example: const BACKEND_URL = "https://my-app.onrender.com";
+
+      const BACKEND_URL = "";
+
+      // NOTE: If BACKEND_URL is empty, it tries to use the local relative path (good for localhost)
+      // =================================================
+
       var map;
       var markers = [];
 
-      // --- COLOR SCALE (Based on PDF Section 5) ---
       function getAqiColor(aqi) {
-          if (aqi > 200) return '#800080'; // Purple/Maroon (Hazardous)
-          if (aqi > 150) return '#ff0000'; // Red (Unhealthy)
-          if (aqi > 100) return '#ff9900'; // Orange (Sensitive)
-          if (aqi > 50)  return '#ffff00'; // Yellow (Moderate)
-          return '#00cc00';                // Green (Good)
+          if (aqi > 200) return '#800080';
+          if (aqi > 150) return '#ff0000';
+          if (aqi > 100) return '#ff9900';
+          if (aqi > 50)  return '#ffff00';
+          return '#00cc00';
       }
 
-      // --- MOCK DATA (For Preview Mode) ---
       function generateMockData() {
           const mockSensors = [];
           const centerLat = 52.2297;
           const centerLng = 21.0122;
 
           for (let i = 0; i < 50; i++) {
-              // Simulate calculated AQI directly
               const mockAqi = Math.floor(Math.random() * 250);
-
               mockSensors.push({
                   name: `sim_sensor_${i}`,
                   lat: centerLat + (Math.random() - 0.5) * 0.15,
@@ -103,12 +109,20 @@
         let sensors = [];
 
         try {
+            // Determine API URL
+            let apiUrl = '/api/pollution-data'; // Default (localhost)
+            if (BACKEND_URL && BACKEND_URL.trim() !== "") {
+                // Ensure no trailing slash
+                const baseUrl = BACKEND_URL.replace(/\/$/, "");
+                apiUrl = `${baseUrl}/api/pollution-data`;
+            }
+
             if (window.location.protocol === 'blob:' || window.location.href.includes('googleusercontent')) {
                  statusDiv.innerText = "Mode: Preview (Mock Data)";
                  sensors = generateMockData();
             } else {
-                 statusDiv.innerText = "Mode: Live Connection";
-                 const response = await fetch('/api/pollution-data');
+                 statusDiv.innerText = "Mode: Live Connection (" + (BACKEND_URL ? "Cloud" : "Local") + ")";
+                 const response = await fetch(apiUrl);
                  if (!response.ok) throw new Error("Network response was not ok");
                  sensors = await response.json();
             }
@@ -127,7 +141,6 @@
                     radius: 12
                 }).addTo(map);
 
-                // Updated Popup
                 circle.bindPopup(`
                     <div style="min-width: 150px; font-family: sans-serif;">
                         <h3 style="margin:0;">${sensor.name}</h3>

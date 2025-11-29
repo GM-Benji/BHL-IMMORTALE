@@ -1,61 +1,161 @@
- <!DOCTYPE html>
-    <html>
-      <head>
-        <title>FastAPI + OpenStreetMap</title>
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Warsaw Air Quality Monitor</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <style>
+      body { margin: 0; padding: 0; font-family: sans-serif; }
+      #map { height: 100vh; width: 100%; }
+      .legend {
+          position: absolute;
+          top: 10px;
+          right: 10px;
+          z-index: 1000;
+          background: white;
+          padding: 15px;
+          border-radius: 8px;
+          box-shadow: 0 0 10px rgba(0,0,0,0.2);
+      }
+      .dot { height: 10px; width: 10px; display: inline-block; border-radius: 50%; margin-right: 5px; }
+      .status-bar {
+          position: absolute;
+          bottom: 10px;
+          left: 10px;
+          z-index: 1000;
+          background: rgba(255, 255, 255, 0.9);
+          padding: 5px 10px;
+          border-radius: 4px;
+          font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
 
-        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-         integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
-         crossorigin=""/>
+    <div class="legend">
+        <h3>Warsaw PM 2.5 Index</h3>
+        <div><span class="dot" style="background:#00cc00;"></span>Good (< 10)</div>
+        <div><span class="dot" style="background:#ffff00;"></span>Moderate (10-25)</div>
+        <div><span class="dot" style="background:#ff9900;"></span>Unhealthy (25-50)</div>
+        <div><span class="dot" style="background:#ff0000;"></span>Hazardous (> 50)</div>
+    </div>
 
-        <style>
-          #map { height: 700px; width: 100%; }
-          body { font-family: sans-serif; padding: 20px; }
-        </style>
-      </head>
-      <body>
-        <h1>FastAPI + OpenStreetMap (Leaflet)</h1>
-        <div id="map"></div>
+    <div id="status" class="status-bar">Initializing...</div>
+    <div id="map"></div>
 
-        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
-         crossorigin=""></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 
-        <script>
-          async function initMap() {
-            // A. Initialize the map object
-            // setView([lat, lng], zoomLevel)
-            var map = L.map('map').setView([24.886, -70.268], 5);
+    <script>
+      var map;
+      var markers = [];
 
-            // B. Add the OpenStreetMap Tile Layer
-            // This pulls the map images from OSM servers.
-            L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                maxZoom: 19,
-                attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-            }).addTo(map);
+      // --- COLOR UTILS ---
+      function getColor(pm25) {
+          if (pm25 > 50) return '#ff0000'; // Red
+          if (pm25 > 25) return '#ff9900'; // Orange
+          if (pm25 > 10) return '#ffff00'; // Yellow
+          return '#00cc00';                // Green
+      }
 
-            // C. Fetch data from FastAPI
-            try {
-                const response = await fetch('/api/zone-borders');
-                const data = await response.json();
+      // --- MOCK DATA GENERATOR (For Preview Mode) ---
+      function generateMockData() {
+          const mockSensors = [];
+          const centerLat = 52.2297;
+          const centerLng = 21.0122;
 
-                // D. Draw the Polygon
-                // L.polygon takes an array of [lat, lng] arrays
-                var polygon = L.polygon(data.coordinates, {
-                    color: 'red',
-                    fillColor: '#f03',
-                    fillOpacity: 0.5
+          for (let i = 0; i < 50; i++) {
+              // Random pollution spikes
+              const isPolluted = Math.random() > 0.7;
+              const pm25 = isPolluted ? 30 + Math.random() * 40 : 5 + Math.random() * 15;
+
+              mockSensors.push({
+                  name: `sim_sensor_${i}`,
+                  lat: centerLat + (Math.random() - 0.5) * 0.15,
+                  lng: centerLng + (Math.random() - 0.5) * 0.25,
+                  pm2_5: pm25,
+                  details: {
+                      pm10: pm25 * 1.5,
+                      temperature: 15 + Math.random() * 10,
+                      humidity: 40 + Math.random() * 20
+                  }
+              });
+          }
+          return mockSensors;
+      }
+
+      function initMap() {
+        // Center on Warsaw, Poland
+        map = L.map('map').setView([52.2297, 21.0122], 12);
+
+        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; OpenStreetMap'
+        }).addTo(map);
+
+        // Start fetching data
+        fetchData();
+        setInterval(fetchData, 2000); // Update every 2 seconds
+      }
+
+      async function fetchData() {
+        const statusDiv = document.getElementById('status');
+        let sensors = [];
+
+        try {
+            // Check if we are running in a Blob/Preview environment
+            // Relative URLs like '/api/...' fail in Blob URLs
+            if (window.location.protocol === 'blob:' || window.location.href.includes('googleusercontent')) {
+                 statusDiv.innerText = "Mode: Preview (Mock Data)";
+                 sensors = generateMockData();
+            } else {
+                 statusDiv.innerText = "Mode: Live Connection";
+                 const response = await fetch('/api/pollution-data');
+                 if (!response.ok) throw new Error("Network response was not ok");
+                 sensors = await response.json();
+            }
+
+            // Clear existing markers
+            markers.forEach(m => map.removeLayer(m));
+            markers = [];
+
+            sensors.forEach(sensor => {
+                const color = getColor(sensor.pm2_5);
+
+                var circle = L.circleMarker([sensor.lat, sensor.lng], {
+                    color: '#333',     // Border color
+                    weight: 1,         // Border width
+                    fillColor: color,
+                    fillOpacity: 0.8,
+                    radius: 12
                 }).addTo(map);
 
-                // Optional: Bind a popup to the polygon
-                polygon.bindPopup("<b>Restricted Zone</b><br>Defined by FastAPI backend.");
+                // Detailed popup
+                circle.bindPopup(`
+                    <div style="min-width: 150px;">
+                        <h3>${sensor.name}</h3>
+                        <hr>
+                        <b>PM 2.5:</b> ${sensor.pm2_5.toFixed(1)} µg/m³<br>
+                        <b>PM 10:</b> ${sensor.details.pm10.toFixed(1)} µg/m³<br>
+                        <b>Temp:</b> ${sensor.details.temperature.toFixed(1)} °C<br>
+                        <b>Humidity:</b> ${sensor.details.humidity.toFixed(1)}%
+                    </div>
+                `);
 
-            } catch (error) {
-                console.error("Error loading map data:", error);
+                markers.push(circle);
+            });
+
+        } catch (error) {
+            console.error("Error fetching data:", error);
+            statusDiv.innerText = "Error: " + error.message;
+
+            // Fallback for local dev if server is down but file is open
+            if (markers.length === 0) {
+                console.warn("Falling back to mock data due to error.");
+                sensors = generateMockData();
             }
-          }
+        }
+      }
 
-          // Run the function
-          initMap();
-        </script>
-      </body>
-    </html>
+      initMap();
+    </script>
+  </body>
+</html>

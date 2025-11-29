@@ -6,69 +6,96 @@ import time
 # Configuration
 API_URL = "http://127.0.0.1:8000/api/report"
 API_KEY = "SECRET_KEY_123"
-SENSOR_COUNT = 50  # We will simulate 50 different devices
+SENSOR_COUNT = 60  # Reduced to 60 for cleaner map
 
-# Warsaw is roughly here, but the server will handle the location assignment.
-# We just need to generate unique sensor names.
-SENSORS = [f"warsaw_sensor_{i:03d}" for i in range(SENSOR_COUNT)]
+class SimulatedSensor:
+    def __init__(self, name):
+        self.name = name
+        self.api_key = API_KEY
 
-def generate_sensor_data(sensor_name):
-    """
-    Generates random pollution data.
-    Some sensors will be 'dirty' (high pollution) and some 'clean'.
-    """
-    # Create a "personality" for the sensor based on its name hash
-    # This ensures sensor_001 is always generally clean or generally dirty
-    is_industrial_zone = hash(sensor_name) % 3 == 0
+        # 1. Give each sensor a "Personality" (Industrial vs Residential)
+        is_industrial = hash(name) % 4 == 0
 
-    base_pm25 = 60 if is_industrial_zone else 15
-    variance = random.uniform(-10, 10)
+        if is_industrial:
+            self.pm25 = random.uniform(40, 80)
+            self.voc = random.uniform(150, 300)
+            self.nox = random.uniform(100, 250)
+        else:
+            self.pm25 = random.uniform(5, 25)
+            self.voc = random.uniform(10, 80)
+            self.nox = random.uniform(10, 60)
 
-    # Ensure values don't go below zero
-    pm25 = max(0, base_pm25 + variance)
-    pm10 = max(0, pm25 * 1.5 + random.uniform(-5, 5))
+        # Environmental baselines
+        self.co2 = random.uniform(400, 600)
+        self.temp = random.uniform(15, 25)
+        self.humidity = random.uniform(40, 60)
+        self.pm10 = self.pm25 * 1.5
+        self.pm1_0 = self.pm25 * 0.5
 
-    return {
-        "sensor_name": sensor_name,
-        "api_key": API_KEY,
-        "carbon_dioxide": random.uniform(400, 1200),
-        "temperature": random.uniform(10, 25), # Warsaw autumn/spring temp
-        "humidity": random.uniform(40, 80),
-        "voc_index": random.uniform(0, 500),
-        "nox_index": random.uniform(0, 500),
-        "pm1_0": max(0, pm25 * 0.5),
-        "pm2_5": pm25,
-        "pm10": pm10
-    }
+    def update(self):
+        """
+        Drift values slightly to simulate real-world changes.
+        """
+        # Small random walk
+        self.pm25 += random.uniform(-1.5, 1.5)
+        self.pm25 = max(0, min(self.pm25, 300))
 
-async def send_data(session, sensor_name):
-    """Sends a single POST request for one sensor."""
-    payload = generate_sensor_data(sensor_name)
+        # Correlated values
+        self.pm10 = self.pm25 * (1.5 + random.uniform(-0.1, 0.1))
+        self.pm1_0 = self.pm25 * (0.5 + random.uniform(-0.05, 0.05))
+
+        self.voc += random.uniform(-5, 5)
+        self.voc = max(0, min(self.voc, 500))
+
+        self.nox += random.uniform(-3, 3)
+        self.nox = max(0, min(self.nox, 500))
+
+        self.co2 += random.uniform(-2, 2)
+        self.temp += random.uniform(-0.1, 0.1)
+        self.humidity += random.uniform(-0.5, 0.5)
+
+    def to_json(self):
+        return {
+            "sensor_name": self.name,
+            "api_key": self.api_key,
+            "carbon_dioxide": round(self.co2, 2),
+            "temperature": round(self.temp, 2),
+            "humidity": round(self.humidity, 2),
+            "voc_index": round(self.voc, 2),
+            "nox_index": round(self.nox, 2),
+            "pm1_0": round(self.pm1_0, 2),
+            "pm2_5": round(self.pm25, 2),
+            "pm10": round(self.pm10, 2)
+        }
+
+# Initialize 60 Sensors
+sensors = [SimulatedSensor(f"warsaw_sensor_{i:03d}") for i in range(SENSOR_COUNT)]
+
+async def send_data(session, sensor):
+    """Updates sensor state and sends data"""
+    sensor.update()
+    payload = sensor.to_json()
+
     try:
         async with session.post(API_URL, json=payload) as response:
-            # We just consume the response to ensure the request finished
             await response.text()
-            # print(f"Sent data for {sensor_name}: PM2.5 = {payload['pm2_5']:.2f}")
     except Exception as e:
-        print(f"Failed to send {sensor_name}: {e}")
+        print(f"Connection error for {sensor.name}: {e}")
 
 async def main_loop():
-    print(f"--- Starting Simulation for {SENSOR_COUNT} Sensors in Warsaw ---")
+    print(f"--- Starting Simulation for {SENSOR_COUNT} Sensors ---")
 
     async with aiohttp.ClientSession() as session:
         while True:
             tasks = []
-            for sensor in SENSORS:
+            for sensor in sensors:
                 tasks.append(send_data(session, sensor))
 
-            # Send all 50 requests virtually at the same time
             await asyncio.gather(*tasks)
-
-            print(f"Batch sent. Waiting 5 seconds...")
-            await asyncio.sleep(5)
+            await asyncio.sleep(5) # Wait 5 seconds between updates
 
 if __name__ == "__main__":
     try:
         asyncio.run(main_loop())
     except KeyboardInterrupt:
-        print("Simulation stopped.")
+        print("Stopped.")

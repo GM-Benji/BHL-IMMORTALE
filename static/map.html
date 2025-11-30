@@ -3,6 +3,7 @@
   <head>
     <title>Warsaw U-AQI Monitor</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
       body { margin: 0; padding: 0; font-family: sans-serif; }
       #map { height: 100vh; width: 100%; }
@@ -65,6 +66,27 @@
           background: #007bff;
           color: white;
       }
+
+      /* POPUP CHART STYLES */
+      .popup-container {
+          display: flex;
+          flex-direction: row;
+          width: 500px;
+          font-family: sans-serif;
+      }
+      .popup-stats {
+          flex: 1;
+          padding-right: 15px;
+          border-right: 1px solid #ddd;
+      }
+      .popup-chart-wrapper {
+          flex: 1.2;
+          padding-left: 15px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 200px;
+      }
     </style>
   </head>
   <body>
@@ -89,7 +111,11 @@
       var map;
       var markers = {};
       var currentMode = 'aqi'; // 'aqi' or 'soil'
-      var lastSensorData = []; // Store data locally for instant toggling
+      var lastSensorData = [];
+
+      // Chart Globals
+      var activeSensorName = null;
+      var activeChart = null;
 
       // --- COLOR SCALES ---
 
@@ -102,11 +128,11 @@
       }
 
       function getSoilColor(humidity) {
-          if (humidity < 20) return '#d2691e'; // Chocolate/Brown (Very Dry)
-          if (humidity < 40) return '#f4a460'; // Sandy Brown (Dry)
-          if (humidity < 60) return '#9acd32'; // YellowGreen (Moderate)
-          if (humidity < 80) return '#32cd32'; // LimeGreen (Moist)
-          return '#0000cd';                // MediumBlue (Wet)
+          if (humidity < 20) return '#d2691e'; // Chocolate
+          if (humidity < 40) return '#f4a460'; // Sandy Brown
+          if (humidity < 60) return '#9acd32'; // YellowGreen
+          if (humidity < 80) return '#32cd32'; // LimeGreen
+          return '#0000cd';                // MediumBlue
       }
 
       // --- LEGEND RENDERER ---
@@ -137,24 +163,145 @@
       function setMode(mode) {
           currentMode = mode;
 
-          // Update Buttons
           document.getElementById('btn-aqi').className = mode === 'aqi' ? 'mode-btn active' : 'mode-btn';
           document.getElementById('btn-soil').className = mode === 'soil' ? 'mode-btn active' : 'mode-btn';
 
           updateLegend();
-          renderMarkers(lastSensorData); // Re-render immediately
+          renderMarkers(lastSensorData);
+
+          // If a popup is open, we need to refresh the chart to show the new metric
+          if (activeSensorName && activeChart) {
+              fetchHistoryAndDrawChart(activeSensorName);
+          }
       }
 
-      // --- MOCK DATA ---
+      // --- CHART LOGIC ---
+
+      async function fetchHistoryAndDrawChart(sensorName) {
+          try {
+              let historyData = [];
+              // In Mock Mode, generate fake history
+              if (window.location.protocol === 'blob:' || window.location.href.includes('googleusercontent')) {
+                   historyData = Array.from({length: 20}, (_, i) => ({
+                       timestamp: Date.now() / 1000 - (20 - i) * 5,
+                       pm2_5: Math.random() * 50,
+                       pm10: Math.random() * 80,
+                       soil_humidity: Math.random() * 100
+                   }));
+              } else {
+                   const res = await fetch(`/api/history/${sensorName}`);
+                   if (res.ok) historyData = await res.json();
+              }
+
+              const ctx = document.getElementById('popup-chart');
+              if (!ctx) return; // Popup might have closed
+
+              // Destroy previous chart if exists
+              if (activeChart) {
+                  activeChart.destroy();
+              }
+
+              const labels = historyData.map(d => {
+                  const date = new Date(d.timestamp * 1000);
+                  return date.getHours() + ':' + date.getMinutes().toString().padStart(2, '0') + ':' + date.getSeconds().toString().padStart(2, '0');
+              });
+
+              let datasets = [];
+              if (currentMode === 'aqi') {
+                  datasets = [
+                      {
+                          label: 'PM 2.5',
+                          data: historyData.map(d => d.pm2_5),
+                          borderColor: 'rgb(255, 99, 132)',
+                          tension: 0.3,
+                          fill: false
+                      },
+                      {
+                          label: 'PM 10',
+                          data: historyData.map(d => d.pm10),
+                          borderColor: 'rgb(54, 162, 235)',
+                          tension: 0.3,
+                          fill: false
+                      }
+                  ];
+              } else {
+                  datasets = [
+                      {
+                          label: 'Soil Humidity (%)',
+                          data: historyData.map(d => d.soil_humidity),
+                          borderColor: 'rgb(75, 192, 192)',
+                          backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                          tension: 0.3,
+                          fill: true
+                      }
+                  ];
+              }
+
+              activeChart = new Chart(ctx, {
+                  type: 'line',
+                  data: { labels: labels, datasets: datasets },
+                  options: {
+                      responsive: true,
+                      maintainAspectRatio: false,
+                      animation: false, // Disable animation for smoother live updates
+                      plugins: {
+                          legend: { position: 'top', labels: { boxWidth: 10 } }
+                      },
+                      scales: {
+                          x: { display: false }, // Hide timestamps to save space
+                          y: { beginAtZero: true }
+                      }
+                  }
+              });
+
+          } catch (e) {
+              console.error("Error drawing chart", e);
+          }
+      }
+
+      function initMap() {
+        map = L.map('map').setView([52.2297, 21.0122], 12);
+
+        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; OpenStreetMap'
+        }).addTo(map);
+
+        // --- EVENT LISTENERS FOR POPUP ---
+        map.on('popupopen', function(e) {
+             const marker = e.popup._source;
+             // We need to find the sensor name.
+             // We stored markers keyed by name, but here we have the marker object.
+             // Let's iterate markers to find the name (inefficient but safe) or attach name to marker options.
+             // Better: Attach name to the marker object directly during creation.
+             if (marker.sensorName) {
+                 activeSensorName = marker.sensorName;
+                 // Slight delay to ensure DOM is ready
+                 setTimeout(() => fetchHistoryAndDrawChart(activeSensorName), 50);
+             }
+        });
+
+        map.on('popupclose', function() {
+            if (activeChart) {
+                activeChart.destroy();
+                activeChart = null;
+            }
+            activeSensorName = null;
+        });
+
+        updateLegend();
+        fetchData();
+        setInterval(fetchData, 2000);
+      }
+
+      // --- MOCK DATA GENERATOR ---
       function generateMockData() {
           const mockSensors = [];
           const centerLat = 52.2297;
           const centerLng = 21.0122;
-
           for (let i = 0; i < 50; i++) {
               const mockAqi = Math.floor(Math.random() * 250);
               const mockSoil = Math.random() * 100;
-
               mockSensors.push({
                   name: `sim_sensor_${i}`,
                   lat: centerLat + (Math.random() - 0.5) * 0.15,
@@ -176,27 +323,12 @@
           return mockSensors;
       }
 
-      function initMap() {
-        map = L.map('map').setView([52.2297, 21.0122], 12);
-
-        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            maxZoom: 19,
-            attribution: '&copy; OpenStreetMap'
-        }).addTo(map);
-
-        updateLegend(); // Init legend
-        fetchData();
-        setInterval(fetchData, 2000);
-      }
-
-      // Separate render logic to allow instant switching
       function renderMarkers(sensors) {
           const currentSensorNames = new Set();
 
           sensors.forEach(sensor => {
                 currentSensorNames.add(sensor.name);
 
-                // Determine color based on mode
                 let color;
                 if (currentMode === 'aqi') {
                     color = getAqiColor(sensor.aqi);
@@ -204,54 +336,90 @@
                     color = getSoilColor(parseFloat(sensor.details.soil_humidity));
                 }
 
-                // Prepare popup content
-                const popupContent = `
-                    <div style="min-width: 160px; font-family: sans-serif;">
-                        <h3 style="margin:0; border-bottom: 2px solid ${color}; padding-bottom: 5px;">${sensor.name}</h3>
+                // If this sensor is currently OPEN, we update stats DOM and Chart directly
+                if (activeSensorName === sensor.name) {
+                    // Update Text Values safely
+                    const elAqi = document.getElementById('popup-val-aqi');
+                    if (elAqi) elAqi.innerText = sensor.aqi;
 
-                        <div style="font-size: 1.1em; font-weight:bold; margin: 10px 0; color: #333;">
-                            AQI: ${sensor.aqi} | Soil: ${Number(sensor.details.soil_humidity).toFixed(1)}%
-                        </div>
+                    const elSoil = document.getElementById('popup-val-soil');
+                    if (elSoil) elSoil.innerText = Number(sensor.details.soil_humidity).toFixed(1);
 
-                        <div style="background-color: #f5f5f5; padding: 5px; border-radius: 4px; margin-bottom: 5px;">
-                            <strong>Environment</strong><br>
-                            Temp: ${Number(sensor.details.temperature).toFixed(1)} °C<br>
-                            Air Hum: ${Number(sensor.details.humidity).toFixed(1)} %<br>
-                            <strong>Soil Hum: ${Number(sensor.details.soil_humidity).toFixed(1)} %</strong>
-                        </div>
+                    const elPm25 = document.getElementById('popup-val-pm25');
+                    if (elPm25) elPm25.innerText = sensor.details.pm2_5;
 
-                        <div style="background-color: #f5f5f5; padding: 5px; border-radius: 4px; margin-bottom: 5px;">
-                            <strong>Particulate Matter</strong><br>
-                            PM 1.0: ${sensor.details.pm1_0} µg/m³<br>
-                            PM 2.5: ${sensor.details.pm2_5} µg/m³<br>
-                            PM 10: ${sensor.details.pm10} µg/m³
-                        </div>
-                    </div>
-                `;
+                    // Update Chart Live
+                    if (activeChart) {
+                        const newLabel = new Date().toLocaleTimeString();
+                        activeChart.data.labels.push(newLabel);
+                        if (activeChart.data.labels.length > 20) activeChart.data.labels.shift();
 
-                if (markers[sensor.name]) {
-                    // UPDATE
-                    markers[sensor.name].setStyle({ fillColor: color });
+                        if (currentMode === 'aqi') {
+                            // PM 2.5
+                            activeChart.data.datasets[0].data.push(sensor.details.pm2_5);
+                            if (activeChart.data.datasets[0].data.length > 20) activeChart.data.datasets[0].data.shift();
+                            // PM 10
+                            activeChart.data.datasets[1].data.push(sensor.details.pm10);
+                            if (activeChart.data.datasets[1].data.length > 20) activeChart.data.datasets[1].data.shift();
+                        } else {
+                            // Soil
+                            activeChart.data.datasets[0].data.push(sensor.details.soil_humidity);
+                            if (activeChart.data.datasets[0].data.length > 20) activeChart.data.datasets[0].data.shift();
+                        }
+                        activeChart.update('none'); // Update without animation
+                    }
 
-                    // Only update popup if it's NOT open (to prevent jitter while reading)
-                    // Or we can update just the content. Leaflet allows updating content without closing.
-                    markers[sensor.name].setPopupContent(popupContent);
+                    // Update the marker color too
+                    if (markers[sensor.name]) {
+                        markers[sensor.name].setStyle({ fillColor: color });
+                    }
+
                 } else {
-                    // CREATE
-                    var circle = L.circleMarker([sensor.lat, sensor.lng], {
-                        color: '#333',
-                        weight: 1,
-                        fillColor: color,
-                        fillOpacity: 0.8,
-                        radius: 12
-                    }).addTo(map);
+                    // Normal render for closed popups
+                    const popupContent = `
+                        <div class="popup-container">
+                            <div class="popup-stats">
+                                <h3 style="margin:0; border-bottom: 2px solid ${color}; padding-bottom: 5px;">${sensor.name}</h3>
 
-                    circle.bindPopup(popupContent);
-                    markers[sensor.name] = circle;
+                                <div style="font-size: 1.1em; font-weight:bold; margin: 10px 0; color: #333;">
+                                    AQI: <span id="popup-val-aqi">${sensor.aqi}</span> |
+                                    Soil: <span id="popup-val-soil">${Number(sensor.details.soil_humidity).toFixed(1)}</span>%
+                                </div>
+
+                                <div style="background-color: #f5f5f5; padding: 5px; border-radius: 4px; margin-bottom: 5px;">
+                                    <strong>PM 2.5:</strong> <span id="popup-val-pm25">${sensor.details.pm2_5}</span> µg/m³<br>
+                                    <strong>Temp:</strong> ${Number(sensor.details.temperature).toFixed(1)} °C<br>
+                                    <strong>Air Hum:</strong> ${Number(sensor.details.humidity).toFixed(1)} %
+                                </div>
+                            </div>
+                            <div class="popup-chart-wrapper">
+                                <canvas id="popup-chart"></canvas>
+                            </div>
+                        </div>
+                    `;
+
+                    if (markers[sensor.name]) {
+                        markers[sensor.name].setStyle({ fillColor: color });
+                        markers[sensor.name].setPopupContent(popupContent);
+                    } else {
+                        var circle = L.circleMarker([sensor.lat, sensor.lng], {
+                            color: '#333',
+                            weight: 1,
+                            fillColor: color,
+                            fillOpacity: 0.8,
+                            radius: 12
+                        }).addTo(map);
+
+                        // Attach ID to marker for event listener
+                        circle.sensorName = sensor.name;
+
+                        // Important: Increase maxWidth for the chart
+                        circle.bindPopup(popupContent, { maxWidth: 550 });
+                        markers[sensor.name] = circle;
+                    }
                 }
             });
 
-            // Cleanup
             for (let name in markers) {
                 if (!currentSensorNames.has(name)) {
                     map.removeLayer(markers[name]);
@@ -275,7 +443,7 @@
                  sensors = await response.json();
             }
 
-            lastSensorData = sensors; // Save for toggle switching
+            lastSensorData = sensors;
             renderMarkers(sensors);
 
         } catch (error) {

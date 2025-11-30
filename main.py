@@ -2,11 +2,13 @@ import uvicorn
 import random
 import math
 import os
+import time
+from collections import deque
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 
 app = FastAPI()
 
@@ -25,16 +27,19 @@ class SensorData(BaseModel):
     carbon_dioxide: float
     temperature: float
     humidity: float
-    soil_humidity: float # New Field
+    soil_humidity: float
     voc_index: float = 0.0
     nox_index: float = 0.0
     pm1_0: float
     pm2_5: float
     pm10: float
     universal_aqi: Optional[int] = None
+    timestamp: Optional[float] = None # Added timestamp for history
 
 sensor_locations: Dict[str, Dict[str, float]] = {}
 latest_readings: Dict[str, SensorData] = {}
+# History storage: Map sensor_name -> Deque of last 30 readings
+sensor_history: Dict[str, deque] = {}
 
 # --- FALLBACK LOCATIONS (If sensor doesn't report its own) ---
 GREEN_ZONES = [
@@ -89,16 +94,23 @@ async def report_pollution(data: SensorData):
     if data.api_key != "SECRET_KEY_123":
         raise HTTPException(status_code=403, detail="Invalid API Key")
 
-    # 1. Location Handling (Priority: Sensor Provided > Auto-Generated)
+    # 1. Location Handling
     if data.lat is not None and data.lng is not None:
         sensor_locations[data.sensor_name] = {"lat": data.lat, "lng": data.lng}
     elif data.sensor_name not in sensor_locations:
         sensor_locations[data.sensor_name] = generate_warsaw_location()
         print(f"New sensor (auto-located): {data.sensor_name}")
 
-    # 2. Calculate & Store
+    # 2. Add Timestamp & Calculate AQI
+    data.timestamp = time.time()
     data.universal_aqi = calculate_aqi(data)
+
+    # 3. Store in Latest & History
     latest_readings[data.sensor_name] = data
+
+    if data.sensor_name not in sensor_history:
+        sensor_history[data.sensor_name] = deque(maxlen=30)
+    sensor_history[data.sensor_name].append(data)
 
     return {"status": "success", "aqi": data.universal_aqi}
 
@@ -118,6 +130,13 @@ async def get_pollution_map():
             })
 
     return response_data
+
+@app.get("/api/history/{sensor_name}")
+async def get_sensor_history(sensor_name: str):
+    """Returns the last 30 readings for a specific sensor."""
+    if sensor_name not in sensor_history:
+        return []
+    return list(sensor_history[sensor_name])
 
 @app.get("/")
 async def read_root():

@@ -108,6 +108,8 @@ async def report_pollution(data: SensorData):
     # 3. Store in Latest & History
     latest_readings[data.sensor_name] = data
 
+    data.soil_humidity = (0 if data.soil_humidity > 2000 else 100 - data.soil_humidity / 2000 * 100)
+
     if data.sensor_name not in sensor_history:
         sensor_history[data.sensor_name] = deque(maxlen=30)
     sensor_history[data.sensor_name].append(data)

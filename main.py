@@ -18,6 +18,10 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 class SensorData(BaseModel):
     sensor_name: str
     api_key: str
+    # Added coordinates so simulator can control geography
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+
     carbon_dioxide: float
     temperature: float
     humidity: float
@@ -31,51 +35,21 @@ class SensorData(BaseModel):
 sensor_locations: Dict[str, Dict[str, float]] = {}
 latest_readings: Dict[str, SensorData] = {}
 
-# --- PRECISE GREEN MICRO-ZONES ---
-# Smaller radii (0.0015 - 0.0025) to ensure points stay strictly on grass/trees.
+# --- FALLBACK LOCATIONS (If sensor doesn't report its own) ---
 GREEN_ZONES = [
-    # Pole Mokotowskie (Split into safe sectors)
     {"name": "Pole Mokotowskie (Main Lawn)", "lat": 52.2185, "lng": 21.0060, "radius": 0.0025},
-    {"name": "Pole Mokotowskie (Ponds Area)", "lat": 52.2195, "lng": 21.0020, "radius": 0.0020},
-    {"name": "Pole Mokotowskie (East)", "lat": 52.2175, "lng": 21.0110, "radius": 0.0015},
-
-    # Lazienki Krolewskie (Avoid Palace/Water)
-    {"name": "Lazienki (Garden South)", "lat": 52.2120, "lng": 21.0350, "radius": 0.0020},
-    {"name": "Lazienki (Garden North)", "lat": 52.2160, "lng": 21.0330, "radius": 0.0015},
-
-    # Park Ujazdowski (Very specific)
-    {"name": "Park Ujazdowski", "lat": 52.2220, "lng": 21.0280, "radius": 0.0012},
-
-    # Ogrod Saski (Central)
     {"name": "Ogrod Saski", "lat": 52.2410, "lng": 21.0030, "radius": 0.0015},
-
-    # Park Skaryszewski
-    {"name": "Park Skaryszewski (West)", "lat": 52.2425, "lng": 21.0540, "radius": 0.0020},
-    {"name": "Park Skaryszewski (East)", "lat": 52.2430, "lng": 21.0590, "radius": 0.0020},
-
-    # Las Kabacki (Deep Woods)
-    {"name": "Las Kabacki (Deep)", "lat": 52.1260, "lng": 21.0450, "radius": 0.0080},
-
-    # Las Bielanski
-    {"name": "Las Bielanski", "lat": 52.2960, "lng": 20.9580, "radius": 0.0040},
+    {"name": "Park Skaryszewski", "lat": 52.2425, "lng": 21.0540, "radius": 0.0020},
 ]
 
 def generate_warsaw_location():
     """Generates a random coordinate strictly inside a green zone."""
-    # 1. Pick a random safe zone
     zone = random.choice(GREEN_ZONES)
-
-    # 2. Generate random point within that circle
     r = zone["radius"] * math.sqrt(random.random())
     theta = random.random() * 2 * math.pi
-
-    # 3. Calculate offset
-    lat_offset = r * math.cos(theta)
-    lng_offset = r * math.sin(theta) * 1.6 # Longitude correction
-
     return {
-        "lat": zone["lat"] + lat_offset,
-        "lng": zone["lng"] + lng_offset
+        "lat": zone["lat"] + r * math.cos(theta),
+        "lng": zone["lng"] + r * math.sin(theta) * 1.6
     }
 
 # --- AQI ALGORITHM ---
@@ -114,10 +88,12 @@ async def report_pollution(data: SensorData):
     if data.api_key != "SECRET_KEY_123":
         raise HTTPException(status_code=403, detail="Invalid API Key")
 
-    # 1. Auto-Discovery
-    if data.sensor_name not in sensor_locations:
+    # 1. Location Handling (Priority: Sensor Provided > Auto-Generated)
+    if data.lat is not None and data.lng is not None:
+        sensor_locations[data.sensor_name] = {"lat": data.lat, "lng": data.lng}
+    elif data.sensor_name not in sensor_locations:
         sensor_locations[data.sensor_name] = generate_warsaw_location()
-        print(f"New sensor: {data.sensor_name}")
+        print(f"New sensor (auto-located): {data.sensor_name}")
 
     # 2. Calculate & Store
     data.universal_aqi = calculate_aqi(data)

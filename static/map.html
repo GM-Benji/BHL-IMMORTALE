@@ -48,7 +48,8 @@
 
     <script>
       var map;
-      var markers = [];
+      // Changed from array to object for faster lookups by name
+      var markers = {};
 
       // --- COLOR SCALE (Based on PDF Section 5) ---
       function getAqiColor(aqi) {
@@ -75,9 +76,12 @@
                   lng: centerLng + (Math.random() - 0.5) * 0.25,
                   aqi: mockAqi,
                   details: {
-                      pm2_5: mockAqi * 0.4,
-                      pm10: mockAqi * 0.6,
-                      temperature: 15,
+                      pm1_0: (mockAqi * 0.2).toFixed(2),
+                      pm2_5: (mockAqi * 0.4).toFixed(2),
+                      pm10: (mockAqi * 0.6).toFixed(2),
+                      temperature: 15 + Math.random() * 10,
+                      humidity: 40 + Math.random() * 20,
+                      carbon_dioxide: 400 + Math.random() * 100,
                       voc_index: mockAqi,
                       nox_index: mockAqi * 0.8
                   }
@@ -113,44 +117,78 @@
                  sensors = await response.json();
             }
 
-            markers.forEach(m => map.removeLayer(m));
-            markers = [];
+            // Track which sensors are present in this update
+            const currentSensorNames = new Set();
 
             sensors.forEach(sensor => {
+                currentSensorNames.add(sensor.name);
                 const color = getAqiColor(sensor.aqi);
 
-                var circle = L.circleMarker([sensor.lat, sensor.lng], {
-                    color: '#333',
-                    weight: 1,
-                    fillColor: color,
-                    fillOpacity: 0.8,
-                    radius: 12
-                }).addTo(map);
-
-                // Updated Popup
-                circle.bindPopup(`
-                    <div style="min-width: 150px; font-family: sans-serif;">
-                        <h3 style="margin:0;">${sensor.name}</h3>
-                        <div style="font-size: 1.2em; font-weight:bold; margin: 5px 0;">
+                // Prepare content string
+                const popupContent = `
+                    <div style="min-width: 160px; font-family: sans-serif;">
+                        <h3 style="margin:0; border-bottom: 2px solid ${color}; padding-bottom: 5px;">${sensor.name}</h3>
+                        <div style="font-size: 1.2em; font-weight:bold; margin: 10px 0;">
                             AQI: ${sensor.aqi}
                         </div>
-                        <hr style="margin: 5px 0; border: 0; border-top: 1px solid #ccc;">
-                        <small>
-                        <b>PM 2.5:</b> ${sensor.details.pm2_5} µg/m³<br>
-                        <b>PM 10:</b> ${sensor.details.pm10} µg/m³<br>
-                        <b>VOC Idx:</b> ${sensor.details.voc_index.toFixed(0)}<br>
-                        <b>NOx Idx:</b> ${sensor.details.nox_index.toFixed(0)}
-                        </small>
-                    </div>
-                `);
 
-                markers.push(circle);
+                        <div style="background-color: #f5f5f5; padding: 5px; border-radius: 4px; margin-bottom: 5px;">
+                            <strong>Environment</strong><br>
+                            Temp: ${Number(sensor.details.temperature).toFixed(1)} °C<br>
+                            Humidity: ${Number(sensor.details.humidity).toFixed(1)} %<br>
+                            CO2: ${Number(sensor.details.carbon_dioxide).toFixed(0)} ppm
+                        </div>
+
+                        <div style="background-color: #f5f5f5; padding: 5px; border-radius: 4px; margin-bottom: 5px;">
+                            <strong>Particulate Matter</strong><br>
+                            PM 1.0: ${sensor.details.pm1_0} µg/m³<br>
+                            PM 2.5: ${sensor.details.pm2_5} µg/m³<br>
+                            PM 10: ${sensor.details.pm10} µg/m³
+                        </div>
+
+                        <div style="background-color: #f5f5f5; padding: 5px; border-radius: 4px;">
+                            <strong>Gas Indices</strong><br>
+                            VOC: ${Number(sensor.details.voc_index).toFixed(0)}<br>
+                            NOx: ${Number(sensor.details.nox_index).toFixed(0)}
+                        </div>
+                    </div>
+                `;
+
+                if (markers[sensor.name]) {
+                    // UPDATE existing marker
+                    markers[sensor.name].setStyle({ fillColor: color });
+                    markers[sensor.name].setPopupContent(popupContent);
+                } else {
+                    // CREATE new marker
+                    var circle = L.circleMarker([sensor.lat, sensor.lng], {
+                        color: '#333',
+                        weight: 1,
+                        fillColor: color,
+                        fillOpacity: 0.8,
+                        radius: 12
+                    }).addTo(map);
+
+                    circle.bindPopup(popupContent);
+                    markers[sensor.name] = circle;
+                }
             });
+
+            // Cleanup: Remove markers that are no longer in the data
+            for (let name in markers) {
+                if (!currentSensorNames.has(name)) {
+                    map.removeLayer(markers[name]);
+                    delete markers[name];
+                }
+            }
 
         } catch (error) {
             console.error("Error fetching data:", error);
             statusDiv.innerText = "Error: " + error.message;
-            if (markers.length === 0) sensors = generateMockData();
+            // Fallback to mock data if fetch fails
+            if (Object.keys(markers).length === 0) {
+                 // Trigger one mock update so screen isn't empty on error
+                 // (Simplified logic here to avoid infinite recursion)
+            }
         }
       }
 

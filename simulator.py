@@ -46,7 +46,7 @@ class SpatiallyAwareSensor:
         self.co2 = 400.0
         self.temp = 20.0
         self.humidity = 50.0
-        self.soil_humidity = 30.0 # New State Variable (0-100%)
+        self.soil_humidity = 1000.0 # New State Variable (0-100%)
 
         self.seed = random.random()
 
@@ -55,7 +55,7 @@ class SpatiallyAwareSensor:
         pm25_accum = 5.0
         voc_accum = 10.0
         nox_accum = 10.0
-        soil_accum = 20.0 # Base dry soil (concrete baseline)
+        soil_accum = 2000.0 # Base dry soil (concrete baseline)
 
         # --- Add Pollution & Subtract Soil Moisture near Sources ---
         for source in POLLUTION_SOURCES:

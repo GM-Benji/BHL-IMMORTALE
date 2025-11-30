@@ -6,6 +6,7 @@
     <style>
       body { margin: 0; padding: 0; font-family: sans-serif; }
       #map { height: 100vh; width: 100%; }
+
       .legend {
           position: absolute;
           top: 10px;
@@ -16,8 +17,11 @@
           border-radius: 8px;
           box-shadow: 0 0 10px rgba(0,0,0,0.2);
           font-size: 14px;
+          min-width: 150px;
       }
+
       .dot { height: 12px; width: 12px; display: inline-block; border-radius: 50%; margin-right: 8px; vertical-align: middle;}
+
       .status-bar {
           position: absolute;
           bottom: 10px;
@@ -28,17 +32,52 @@
           border-radius: 4px;
           font-size: 12px;
       }
+
+      /* TOGGLE BUTTON STYLE */
+      .mode-toggle {
+          position: absolute;
+          top: 20px;
+          left: 60px; /* Offset from zoom controls */
+          z-index: 1000;
+          background: white;
+          border: 2px solid #ccc;
+          border-radius: 4px;
+          cursor: pointer;
+          overflow: hidden;
+          box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+      }
+
+      .mode-btn {
+          padding: 10px 20px;
+          font-weight: bold;
+          font-size: 14px;
+          background: white;
+          border: none;
+          cursor: pointer;
+          transition: background 0.3s;
+      }
+
+      .mode-btn:hover {
+          background: #f0f0f0;
+      }
+
+      .mode-btn.active {
+          background: #007bff;
+          color: white;
+      }
     </style>
   </head>
   <body>
 
-    <div class="legend">
-        <h3>U-AQI Index</h3>
-        <div><span class="dot" style="background:#00cc00;"></span>0-50: Good</div>
-        <div><span class="dot" style="background:#ffff00;"></span>51-100: Moderate</div>
-        <div><span class="dot" style="background:#ff9900;"></span>101-150: Sensitive</div>
-        <div><span class="dot" style="background:#ff0000;"></span>151-200: Unhealthy</div>
-        <div><span class="dot" style="background:#800080;"></span>> 200: Hazardous</div>
+    <!-- CONTROL BUTTON -->
+    <div class="mode-toggle">
+        <button id="btn-aqi" class="mode-btn active" onclick="setMode('aqi')">Air Quality</button>
+        <button id="btn-soil" class="mode-btn" onclick="setMode('soil')">Soil Humidity</button>
+    </div>
+
+    <!-- LEGEND (Dynamic Content) -->
+    <div id="legend" class="legend">
+        <!-- Content injected by JS -->
     </div>
 
     <div id="status" class="status-bar">Initializing...</div>
@@ -48,27 +87,73 @@
 
     <script>
       var map;
-      // Changed from array to object for faster lookups by name
       var markers = {};
+      var currentMode = 'aqi'; // 'aqi' or 'soil'
+      var lastSensorData = []; // Store data locally for instant toggling
 
-      // --- COLOR SCALE (Based on PDF Section 5) ---
+      // --- COLOR SCALES ---
+
       function getAqiColor(aqi) {
-          if (aqi > 200) return '#800080'; // Purple/Maroon (Hazardous)
-          if (aqi > 150) return '#ff0000'; // Red (Unhealthy)
-          if (aqi > 100) return '#ff9900'; // Orange (Sensitive)
-          if (aqi > 50)  return '#ffff00'; // Yellow (Moderate)
-          return '#00cc00';                // Green (Good)
+          if (aqi > 200) return '#800080'; // Purple
+          if (aqi > 150) return '#ff0000'; // Red
+          if (aqi > 100) return '#ff9900'; // Orange
+          if (aqi > 50)  return '#ffff00'; // Yellow
+          return '#00cc00';                // Green
       }
 
-      // --- MOCK DATA (For Preview Mode) ---
+      function getSoilColor(humidity) {
+          if (humidity < 20) return '#d2691e'; // Chocolate/Brown (Very Dry)
+          if (humidity < 40) return '#f4a460'; // Sandy Brown (Dry)
+          if (humidity < 60) return '#9acd32'; // YellowGreen (Moderate)
+          if (humidity < 80) return '#32cd32'; // LimeGreen (Moist)
+          return '#0000cd';                // MediumBlue (Wet)
+      }
+
+      // --- LEGEND RENDERER ---
+      function updateLegend() {
+          const legendDiv = document.getElementById('legend');
+          if (currentMode === 'aqi') {
+              legendDiv.innerHTML = `
+                <h3>U-AQI Index</h3>
+                <div><span class="dot" style="background:#00cc00;"></span>0-50: Good</div>
+                <div><span class="dot" style="background:#ffff00;"></span>51-100: Moderate</div>
+                <div><span class="dot" style="background:#ff9900;"></span>101-150: Sensitive</div>
+                <div><span class="dot" style="background:#ff0000;"></span>151-200: Unhealthy</div>
+                <div><span class="dot" style="background:#800080;"></span>> 200: Hazardous</div>
+              `;
+          } else {
+              legendDiv.innerHTML = `
+                <h3>Soil Humidity</h3>
+                <div><span class="dot" style="background:#d2691e;"></span>0-20%: Very Dry</div>
+                <div><span class="dot" style="background:#f4a460;"></span>21-40%: Dry</div>
+                <div><span class="dot" style="background:#9acd32;"></span>41-60%: Moderate</div>
+                <div><span class="dot" style="background:#32cd32;"></span>61-80%: Moist</div>
+                <div><span class="dot" style="background:#0000cd;"></span>81-100%: Wet</div>
+              `;
+          }
+      }
+
+      // --- MODE SWITCHER ---
+      function setMode(mode) {
+          currentMode = mode;
+
+          // Update Buttons
+          document.getElementById('btn-aqi').className = mode === 'aqi' ? 'mode-btn active' : 'mode-btn';
+          document.getElementById('btn-soil').className = mode === 'soil' ? 'mode-btn active' : 'mode-btn';
+
+          updateLegend();
+          renderMarkers(lastSensorData); // Re-render immediately
+      }
+
+      // --- MOCK DATA ---
       function generateMockData() {
           const mockSensors = [];
           const centerLat = 52.2297;
           const centerLng = 21.0122;
 
           for (let i = 0; i < 50; i++) {
-              // Simulate calculated AQI directly
               const mockAqi = Math.floor(Math.random() * 250);
+              const mockSoil = Math.random() * 100;
 
               mockSensors.push({
                   name: `sim_sensor_${i}`,
@@ -76,6 +161,7 @@
                   lng: centerLng + (Math.random() - 0.5) * 0.25,
                   aqi: mockAqi,
                   details: {
+                      soil_humidity: mockSoil.toFixed(1),
                       pm1_0: (mockAqi * 0.2).toFixed(2),
                       pm2_5: (mockAqi * 0.4).toFixed(2),
                       pm10: (mockAqi * 0.6).toFixed(2),
@@ -98,8 +184,80 @@
             attribution: '&copy; OpenStreetMap'
         }).addTo(map);
 
+        updateLegend(); // Init legend
         fetchData();
         setInterval(fetchData, 2000);
+      }
+
+      // Separate render logic to allow instant switching
+      function renderMarkers(sensors) {
+          const currentSensorNames = new Set();
+
+          sensors.forEach(sensor => {
+                currentSensorNames.add(sensor.name);
+
+                // Determine color based on mode
+                let color;
+                if (currentMode === 'aqi') {
+                    color = getAqiColor(sensor.aqi);
+                } else {
+                    color = getSoilColor(parseFloat(sensor.details.soil_humidity));
+                }
+
+                // Prepare popup content
+                const popupContent = `
+                    <div style="min-width: 160px; font-family: sans-serif;">
+                        <h3 style="margin:0; border-bottom: 2px solid ${color}; padding-bottom: 5px;">${sensor.name}</h3>
+
+                        <div style="font-size: 1.1em; font-weight:bold; margin: 10px 0; color: #333;">
+                            AQI: ${sensor.aqi} | Soil: ${Number(sensor.details.soil_humidity).toFixed(1)}%
+                        </div>
+
+                        <div style="background-color: #f5f5f5; padding: 5px; border-radius: 4px; margin-bottom: 5px;">
+                            <strong>Environment</strong><br>
+                            Temp: ${Number(sensor.details.temperature).toFixed(1)} °C<br>
+                            Air Hum: ${Number(sensor.details.humidity).toFixed(1)} %<br>
+                            <strong>Soil Hum: ${Number(sensor.details.soil_humidity).toFixed(1)} %</strong>
+                        </div>
+
+                        <div style="background-color: #f5f5f5; padding: 5px; border-radius: 4px; margin-bottom: 5px;">
+                            <strong>Particulate Matter</strong><br>
+                            PM 1.0: ${sensor.details.pm1_0} µg/m³<br>
+                            PM 2.5: ${sensor.details.pm2_5} µg/m³<br>
+                            PM 10: ${sensor.details.pm10} µg/m³
+                        </div>
+                    </div>
+                `;
+
+                if (markers[sensor.name]) {
+                    // UPDATE
+                    markers[sensor.name].setStyle({ fillColor: color });
+
+                    // Only update popup if it's NOT open (to prevent jitter while reading)
+                    // Or we can update just the content. Leaflet allows updating content without closing.
+                    markers[sensor.name].setPopupContent(popupContent);
+                } else {
+                    // CREATE
+                    var circle = L.circleMarker([sensor.lat, sensor.lng], {
+                        color: '#333',
+                        weight: 1,
+                        fillColor: color,
+                        fillOpacity: 0.8,
+                        radius: 12
+                    }).addTo(map);
+
+                    circle.bindPopup(popupContent);
+                    markers[sensor.name] = circle;
+                }
+            });
+
+            // Cleanup
+            for (let name in markers) {
+                if (!currentSensorNames.has(name)) {
+                    map.removeLayer(markers[name]);
+                    delete markers[name];
+                }
+            }
       }
 
       async function fetchData() {
@@ -117,78 +275,12 @@
                  sensors = await response.json();
             }
 
-            // Track which sensors are present in this update
-            const currentSensorNames = new Set();
-
-            sensors.forEach(sensor => {
-                currentSensorNames.add(sensor.name);
-                const color = getAqiColor(sensor.aqi);
-
-                // Prepare content string
-                const popupContent = `
-                    <div style="min-width: 160px; font-family: sans-serif;">
-                        <h3 style="margin:0; border-bottom: 2px solid ${color}; padding-bottom: 5px;">${sensor.name}</h3>
-                        <div style="font-size: 1.2em; font-weight:bold; margin: 10px 0;">
-                            AQI: ${sensor.aqi}
-                        </div>
-
-                        <div style="background-color: #f5f5f5; padding: 5px; border-radius: 4px; margin-bottom: 5px;">
-                            <strong>Environment</strong><br>
-                            Temp: ${Number(sensor.details.temperature).toFixed(1)} °C<br>
-                            Humidity: ${Number(sensor.details.humidity).toFixed(1)} %<br>
-                            CO2: ${Number(sensor.details.carbon_dioxide).toFixed(0)} ppm
-                        </div>
-
-                        <div style="background-color: #f5f5f5; padding: 5px; border-radius: 4px; margin-bottom: 5px;">
-                            <strong>Particulate Matter</strong><br>
-                            PM 1.0: ${sensor.details.pm1_0} µg/m³<br>
-                            PM 2.5: ${sensor.details.pm2_5} µg/m³<br>
-                            PM 10: ${sensor.details.pm10} µg/m³
-                        </div>
-
-                        <div style="background-color: #f5f5f5; padding: 5px; border-radius: 4px;">
-                            <strong>Gas Indices</strong><br>
-                            VOC: ${Number(sensor.details.voc_index).toFixed(0)}<br>
-                            NOx: ${Number(sensor.details.nox_index).toFixed(0)}
-                        </div>
-                    </div>
-                `;
-
-                if (markers[sensor.name]) {
-                    // UPDATE existing marker
-                    markers[sensor.name].setStyle({ fillColor: color });
-                    markers[sensor.name].setPopupContent(popupContent);
-                } else {
-                    // CREATE new marker
-                    var circle = L.circleMarker([sensor.lat, sensor.lng], {
-                        color: '#333',
-                        weight: 1,
-                        fillColor: color,
-                        fillOpacity: 0.8,
-                        radius: 12
-                    }).addTo(map);
-
-                    circle.bindPopup(popupContent);
-                    markers[sensor.name] = circle;
-                }
-            });
-
-            // Cleanup: Remove markers that are no longer in the data
-            for (let name in markers) {
-                if (!currentSensorNames.has(name)) {
-                    map.removeLayer(markers[name]);
-                    delete markers[name];
-                }
-            }
+            lastSensorData = sensors; // Save for toggle switching
+            renderMarkers(sensors);
 
         } catch (error) {
             console.error("Error fetching data:", error);
             statusDiv.innerText = "Error: " + error.message;
-            // Fallback to mock data if fetch fails
-            if (Object.keys(markers).length === 0) {
-                 // Trigger one mock update so screen isn't empty on error
-                 // (Simplified logic here to avoid infinite recursion)
-            }
         }
       }
 

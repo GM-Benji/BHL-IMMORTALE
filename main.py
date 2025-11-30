@@ -25,6 +25,7 @@ class SensorData(BaseModel):
     carbon_dioxide: float
     temperature: float
     humidity: float
+    soil_humidity: float # New Field
     voc_index: float = 0.0
     nox_index: float = 0.0
     pm1_0: float
